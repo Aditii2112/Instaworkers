@@ -144,43 +144,69 @@ class VisionAgent:
     # ── Human Detection ──────────────────────────────────────────────
 
     def _detect_human(self, rgb: np.ndarray) -> dict:
-        """Detect faces and hands, return detection metadata."""
+        """Detect humans via MediaPipe (faces/hands) + skin-tone fallback."""
         result = {"human_present": False, "face_count": 0, "hand_count": 0, "face_boxes": [], "hand_boxes": []}
 
-        if self._face_detector is None and self._hand_landmarker is None:
-            return result
-        if self._mp_image_cls is None:
-            return result
+        # MediaPipe detection
+        if self._mp_image_cls is not None and self._mp_image_format is not None:
+            try:
+                mp_image = self._mp_image_cls(
+                    image_format=self._mp_image_format.SRGB, data=rgb
+                )
 
-        mp_image = self._mp_image_cls(
-            image_format=self._mp_image_format.SRGB, data=rgb
-        )
+                if self._face_detector:
+                    face_result = self._face_detector.detect(mp_image)
+                    if face_result.detections:
+                        result["human_present"] = True
+                        result["face_count"] = len(face_result.detections)
+                        for det in face_result.detections:
+                            bb = det.bounding_box
+                            result["face_boxes"].append({
+                                "x": bb.origin_x, "y": bb.origin_y,
+                                "w": bb.width, "h": bb.height,
+                            })
 
-        if self._face_detector:
-            face_result = self._face_detector.detect(mp_image)
-            if face_result.detections:
-                result["human_present"] = True
-                result["face_count"] = len(face_result.detections)
-                for det in face_result.detections:
-                    bb = det.bounding_box
-                    result["face_boxes"].append({
-                        "x": bb.origin_x, "y": bb.origin_y,
-                        "w": bb.width, "h": bb.height,
-                    })
+                if self._hand_landmarker:
+                    hand_result = self._hand_landmarker.detect(mp_image)
+                    if hand_result.hand_landmarks:
+                        result["human_present"] = True
+                        result["hand_count"] = len(hand_result.hand_landmarks)
+                        h, w = rgb.shape[:2]
+                        for landmarks in hand_result.hand_landmarks:
+                            xs = [lm.x * w for lm in landmarks]
+                            ys = [lm.y * h for lm in landmarks]
+                            result["hand_boxes"].append({
+                                "x": int(min(xs)), "y": int(min(ys)),
+                                "w": int(max(xs) - min(xs)), "h": int(max(ys) - min(ys)),
+                            })
+            except Exception as e:
+                print(f"[SEE] MediaPipe detection error: {e}")
 
-        if self._hand_landmarker:
-            hand_result = self._hand_landmarker.detect(mp_image)
-            if hand_result.hand_landmarks:
-                result["human_present"] = True
-                result["hand_count"] = len(hand_result.hand_landmarks)
-                h, w = rgb.shape[:2]
-                for landmarks in hand_result.hand_landmarks:
-                    xs = [lm.x * w for lm in landmarks]
-                    ys = [lm.y * h for lm in landmarks]
-                    result["hand_boxes"].append({
-                        "x": int(min(xs)), "y": int(min(ys)),
-                        "w": int(max(xs) - min(xs)), "h": int(max(ys) - min(ys)),
-                    })
+        # Skin-tone fallback if MediaPipe didn't find anyone
+        if not result["human_present"]:
+            hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+            h_img, w_img = rgb.shape[:2]
+            total_px = h_img * w_img
+            skin_lo1 = np.array([0, 30, 60])
+            skin_hi1 = np.array([20, 180, 255])
+            skin_lo2 = np.array([160, 30, 60])
+            skin_hi2 = np.array([180, 180, 255])
+            skin_mask = cv2.inRange(hsv, skin_lo1, skin_hi1) | cv2.inRange(hsv, skin_lo2, skin_hi2)
+            skin_ratio = cv2.countNonZero(skin_mask) / total_px
+
+            if skin_ratio > 0.03:
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (10, 10))
+                skin_clean = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel, iterations=2)
+                skin_clean = cv2.morphologyEx(skin_clean, cv2.MORPH_CLOSE, kernel, iterations=2)
+                contours, _ = cv2.findContours(skin_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                min_area = total_px * 0.002
+                big_skin = [c for c in contours if cv2.contourArea(c) > min_area]
+                if big_skin:
+                    result["human_present"] = True
+                    result["face_count"] = len(big_skin)
+                    for c in big_skin:
+                        x, y, bw, bh = cv2.boundingRect(c)
+                        result["face_boxes"].append({"x": x, "y": y, "w": bw, "h": bh})
 
         return result
 
@@ -191,25 +217,17 @@ class VisionAgent:
 
         Priority:
           1. mlx-vlm (true multimodal, if installed)
-          2. OpenCV feature extraction → sovereign-sentinel text LLM
-          3. Pure OpenCV heuristics (no LLM)
+          2. Pure OpenCV heuristics (reliable, no LLM needed)
         """
         if self._mlx_available:
             prompt = text_input or _VLM_PROMPT
             return self._vlm_mlx(image_path, prompt)
 
-        # sovereign-sentinel is text-only — extract visual features via OpenCV
-        # and send them as a text prompt for structured reasoning
         frame = cv2.imread(image_path)
         if frame is None:
             return {"anomaly": "none", "severity": "low", "location": "unknown", "raw_vlm": "frame unreadable"}
 
         cv_features = self._extract_cv_features(frame)
-
-        if self.gemma:
-            return self._vlm_text_with_cv(cv_features)
-
-        # No LLM at all — pure CV heuristics
         return self._pure_cv_classify(cv_features)
 
     def _vlm_mlx(self, image_path: str, prompt: str) -> dict:
@@ -240,11 +258,7 @@ class VisionAgent:
 
     @staticmethod
     def _extract_cv_features(frame: np.ndarray) -> dict:
-        """Extract visual features from a frame using OpenCV.
-
-        Returns a dict of signals: color ratios, edge density, dark blob count,
-        small moving object indicators, wetness/sheen indicators, etc.
-        """
+        """Extract visual features from a frame using OpenCV."""
         h, w = frame.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -253,21 +267,21 @@ class VisionAgent:
         features: dict = {"width": w, "height": h}
 
         # --- Color masks ---
-        # Brown/dark blobs (pests, rodents, insects)
-        brown_lo = np.array([5, 50, 30])
-        brown_hi = np.array([25, 200, 150])
+        # Brown/dark blobs (pests, rodents, insects) — tighter range to avoid wood/floors
+        brown_lo = np.array([8, 80, 30])
+        brown_hi = np.array([22, 220, 130])
         brown_mask = cv2.inRange(hsv, brown_lo, brown_hi)
         features["brown_ratio"] = round(cv2.countNonZero(brown_mask) / total_px, 4)
 
         # Green/yellow-green (mold, spoilage)
-        green_lo = np.array([25, 40, 40])
+        green_lo = np.array([25, 50, 50])
         green_hi = np.array([85, 255, 255])
         green_mask = cv2.inRange(hsv, green_lo, green_hi)
         features["green_ratio"] = round(cv2.countNonZero(green_mask) / total_px, 4)
 
-        # Blue reflective / water (leak, spill)
-        blue_lo = np.array([90, 30, 50])
-        blue_hi = np.array([130, 255, 255])
+        # Blue reflective / water (leak, spill) — tighter to avoid blue-tinted scenes
+        blue_lo = np.array([95, 60, 60])
+        blue_hi = np.array([125, 255, 255])
         blue_mask = cv2.inRange(hsv, blue_lo, blue_hi)
         features["blue_ratio"] = round(cv2.countNonZero(blue_mask) / total_px, 4)
 
@@ -280,124 +294,143 @@ class VisionAgent:
         features["dark_ratio"] = round(cv2.countNonZero(dark_mask) / total_px, 4)
 
         # --- Small blob detection (pest-like objects) ---
-        brown_blurred = cv2.GaussianBlur(brown_mask, (5, 5), 0)
-        contours, _ = cv2.findContours(brown_blurred, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        small_blobs = [c for c in contours if 50 < cv2.contourArea(c) < 5000]
-        features["small_brown_blobs"] = len(small_blobs)
+        # Use morphological ops to clean noise before contour detection
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        brown_clean = cv2.morphologyEx(brown_mask, cv2.MORPH_OPEN, kernel, iterations=2)
+        brown_clean = cv2.morphologyEx(brown_clean, cv2.MORPH_CLOSE, kernel, iterations=1)
+        contours, _ = cv2.findContours(brown_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Pest blobs: small, somewhat round (circularity > 0.2), not too big
+        pest_blobs = []
+        for c in contours:
+            area = cv2.contourArea(c)
+            perimeter = cv2.arcLength(c, True)
+            if 100 < area < 3000 and perimeter > 0:
+                circularity = 4 * 3.14159 * area / (perimeter * perimeter)
+                if circularity > 0.15:
+                    pest_blobs.append(c)
+        features["small_brown_blobs"] = len(pest_blobs)
 
         # --- Edge density (damage, cracks) ---
         edges = cv2.Canny(gray, 50, 150)
         features["edge_density"] = round(cv2.countNonZero(edges) / total_px, 4)
 
-        # --- Wetness: specular highlights (bright spots in dark areas) ---
+        # --- Wetness: specular highlights ---
         bright_mask = cv2.inRange(gray, 200, 255)
         features["bright_spots_ratio"] = round(cv2.countNonZero(bright_mask) / total_px, 4)
 
-        # --- Texture irregularity (std dev of Laplacian — sharp = more detail) ---
+        # --- Texture irregularity ---
         laplacian = cv2.Laplacian(gray, cv2.CV_64F)
         features["texture_variance"] = round(float(laplacian.var()), 2)
 
-        return features
+        # --- Skin-tone detection (human presence backup) ---
+        skin_lo1 = np.array([0, 30, 60])
+        skin_hi1 = np.array([20, 180, 255])
+        skin_lo2 = np.array([160, 30, 60])
+        skin_hi2 = np.array([180, 180, 255])
+        skin_mask = cv2.inRange(hsv, skin_lo1, skin_hi1) | cv2.inRange(hsv, skin_lo2, skin_hi2)
+        features["skin_ratio"] = round(cv2.countNonZero(skin_mask) / total_px, 4)
 
-    def _vlm_text_with_cv(self, cv_features: dict) -> dict:
-        """Send CV features as text to sovereign-sentinel for structured reasoning."""
-        feature_desc = (
-            f"Frame analysis ({cv_features['width']}x{cv_features['height']}):\n"
-            f"- Brown/dark object ratio: {cv_features['brown_ratio']:.1%}\n"
-            f"- Small brown blobs (pest-like): {cv_features['small_brown_blobs']}\n"
-            f"- Green/mold ratio: {cv_features['green_ratio']:.1%}\n"
-            f"- Blue/water ratio: {cv_features['blue_ratio']:.1%}\n"
-            f"- Wet sheen ratio: {cv_features['high_sat_ratio']:.1%}\n"
-            f"- Dark region ratio: {cv_features['dark_ratio']:.1%}\n"
-            f"- Edge density: {cv_features['edge_density']:.1%}\n"
-            f"- Bright spots: {cv_features['bright_spots_ratio']:.1%}\n"
-            f"- Texture variance: {cv_features['texture_variance']}"
-        )
-        prompt = (
-            f"You are a warehouse safety inspector. Based on these computer vision "
-            f"measurements from a warehouse camera frame, identify anomalies.\n\n"
-            f"{feature_desc}\n\n"
-            f"Respond in format: SEE: [anomaly description] REASON: explanation "
-            f"ACT: [action]. If no anomaly, say SEE: [no defect]."
-        )
-        try:
-            result = self.gemma.generate(
-                prompt=prompt,
-                max_tokens=256,
-                temperature=0.3,
-            )
-            raw = result.get("text", "")
-            # Strip echoed content
-            cleaned = self._strip_prompt_echo(raw, prompt)
-            parsed = self._parse_vlm_observation(cleaned)
-            # Also run pure CV as a cross-check
-            cv_parsed = self._pure_cv_classify(cv_features)
-            # Merge: if LLM missed something CV caught, add it
-            if parsed["anomaly"] == "none" and cv_parsed["anomaly"] != "none":
-                parsed = cv_parsed
-            elif parsed["anomaly"] != "none" and cv_parsed["anomaly"] != "none":
-                all_a = set(parsed.get("all_anomalies_in_frame", [parsed["anomaly"]]))
-                all_a.update(cv_parsed.get("all_anomalies_in_frame", [cv_parsed["anomaly"]]))
-                parsed["all_anomalies_in_frame"] = sorted(all_a)
-            parsed["raw_vlm"] = cleaned
-            parsed["cv_features"] = cv_features
-            return parsed
-        except Exception as e:
-            print(f"[SEE] Text VLM failed: {e}; falling back to pure CV")
-            result = self._pure_cv_classify(cv_features)
-            result["raw_vlm"] = f"LLM error: {e}"
-            return result
+        # Find large skin blobs (actual humans, not noise)
+        skin_clean = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel, iterations=3)
+        skin_clean = cv2.morphologyEx(skin_clean, cv2.MORPH_CLOSE,
+                                       cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)),
+                                       iterations=2)
+        skin_contours, _ = cv2.findContours(skin_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # A human body/face blob should be at least 0.1% of frame area
+        min_human_area = total_px * 0.001
+        human_blobs = [c for c in skin_contours if cv2.contourArea(c) > min_human_area]
+        features["human_skin_blobs"] = len(human_blobs)
+
+        return features
 
     @staticmethod
     def _pure_cv_classify(cv_features: dict) -> dict:
-        """Classify anomalies using only OpenCV feature thresholds."""
+        """Classify anomalies using OpenCV feature thresholds.
+
+        Tuned against real warehouse video data:
+          - Clean warehouse: blobs=0, brown=0, blue=0, skin=0
+          - Pest video:      blobs=30+, brown>0.05
+          - Leak video:      blue>0.10 (high-saturation blue pooling)
+          - Spoilage video:  green>0.05
+        """
         anomalies: list[str] = []
+        details: list[str] = []
         severity = "low"
 
-        # Pest detection: many small brown blobs
-        if cv_features["small_brown_blobs"] >= 3:
+        blobs = cv_features["small_brown_blobs"]
+        brown = cv_features["brown_ratio"]
+        blue = cv_features["blue_ratio"]
+        green = cv_features["green_ratio"]
+        dark = cv_features["dark_ratio"]
+        edge = cv_features["edge_density"]
+        skin = cv_features.get("skin_ratio", 0)
+        human_blobs = cv_features.get("human_skin_blobs", 0)
+
+        # --- Pest: multiple small brown circular blobs with significant brown area ---
+        if blobs >= 15 and brown > 0.05:
             anomalies.append("pest")
             severity = "high"
-        elif cv_features["small_brown_blobs"] >= 1 and cv_features["brown_ratio"] > 0.02:
+            details.append(f"Pest detected: {blobs} insect-like objects, {brown:.1%} brown coverage")
+        elif blobs >= 8 and brown > 0.03:
             anomalies.append("pest")
             severity = "medium"
+            details.append(f"Possible pest: {blobs} suspicious objects, {brown:.1%} brown coverage")
 
-        # Leak/spill: high blue or wet sheen
-        if cv_features["blue_ratio"] > 0.05:
+        # --- Leak/spill: concentrated blue pooling (not just blue-tinted lighting) ---
+        if blue > 0.15:
             anomalies.append("leak")
             severity = "critical"
-        elif cv_features["bright_spots_ratio"] > 0.08 and cv_features["blue_ratio"] > 0.02:
+            details.append(f"Leak/spill detected: {blue:.1%} blue/water coverage")
+        elif blue > 0.08 and cv_features["bright_spots_ratio"] > 0.05:
             anomalies.append("leak")
-            severity = "high"
+            if severity not in ("critical",):
+                severity = "high"
+            details.append(f"Possible leak: {blue:.1%} blue with specular reflection")
 
-        # Spoilage: green/mold
-        if cv_features["green_ratio"] > 0.10:
+        # --- Spoilage: green/mold ---
+        if green > 0.08:
             anomalies.append("spoilage")
             if severity not in ("critical",):
                 severity = "high"
+            details.append(f"Spoilage/mold: {green:.1%} green coverage")
 
-        # Damage: high edge density + dark regions
-        if cv_features["edge_density"] > 0.15 and cv_features["dark_ratio"] > 0.10:
+        # --- Damage: very high edge density + significant dark areas ---
+        if edge > 0.18 and dark > 0.15:
             anomalies.append("damage")
             if severity == "low":
                 severity = "medium"
+            details.append(f"Structural damage: {edge:.1%} edge density, {dark:.1%} dark regions")
 
-        if not anomalies:
-            return {
-                "anomaly": "none", "severity": "low", "location": "unknown",
-                "raw_vlm": f"CV: no anomaly (blobs={cv_features['small_brown_blobs']}, "
-                           f"blue={cv_features['blue_ratio']:.3f}, green={cv_features['green_ratio']:.3f})",
-                "cv_features": cv_features,
-            }
+        # --- Human presence from skin-tone analysis ---
+        human_detected = False
+        if human_blobs >= 1 and skin > 0.02:
+            human_detected = True
+            details.append(f"Human detected: {human_blobs} skin region(s), {skin:.1%} skin tone")
 
-        return {
-            "anomaly": anomalies[0],
-            "all_anomalies_in_frame": anomalies,
+        # Build structured SEE output
+        if anomalies:
+            see_parts = [f"{a.capitalize()} detected" for a in anomalies]
+            if human_detected:
+                see_parts.append("Human present")
+            see_text = f"SEE: [{'; '.join(see_parts)}] " + " | ".join(details)
+        else:
+            see_text = f"SEE: [no defect] Clean frame (blobs={blobs}, blue={blue:.3f}, green={green:.3f})"
+            if human_detected:
+                see_text = f"SEE: [Human present; no defect] {details[0] if details else ''}"
+
+        result: dict = {
+            "anomaly": anomalies[0] if anomalies else "none",
             "severity": severity,
-            "location": "Zone_A",
-            "raw_vlm": f"CV detected: {', '.join(anomalies)}",
+            "location": "Zone_A" if anomalies else "unknown",
+            "raw_vlm": see_text,
             "cv_features": cv_features,
         }
+        if len(anomalies) > 1:
+            result["all_anomalies_in_frame"] = anomalies
+        if human_detected:
+            result["vlm_human_detected"] = True
+
+        return result
 
     @staticmethod
     def _strip_prompt_echo(response: str, prompt: str) -> str:

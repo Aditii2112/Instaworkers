@@ -19,7 +19,7 @@ build/
 data/
 !data/.gitkeep
 models/
-adapters/
+/adapters/
 finetune_data/
 datasets/
 *.safetensors
