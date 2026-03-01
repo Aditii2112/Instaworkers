@@ -279,11 +279,21 @@ class VisionAgent:
         green_mask = cv2.inRange(hsv, green_lo, green_hi)
         features["green_ratio"] = round(cv2.countNonZero(green_mask) / total_px, 4)
 
-        # Blue reflective / water (leak, spill) — tighter to avoid blue-tinted scenes
+        # Blue reflective / water (leak, spill)
         blue_lo = np.array([95, 60, 60])
         blue_hi = np.array([125, 255, 255])
         blue_mask = cv2.inRange(hsv, blue_lo, blue_hi)
         features["blue_ratio"] = round(cv2.countNonZero(blue_mask) / total_px, 4)
+
+        # Rust/orange (corroded pipes, leak indicator)
+        rust_lo = np.array([5, 60, 50])
+        rust_hi = np.array([22, 255, 220])
+        rust_mask = cv2.inRange(hsv, rust_lo, rust_hi)
+        features["rust_ratio"] = round(cv2.countNonZero(rust_mask) / total_px, 4)
+
+        # Gray/white water (desaturated bright areas — real water/steam)
+        gray_water = cv2.inRange(hsv, np.array([0, 0, 130]), np.array([180, 50, 255]))
+        features["gray_water_ratio"] = round(cv2.countNonZero(gray_water) / total_px, 4)
 
         # High-saturation wet/sheen areas
         high_sat = cv2.inRange(hsv, np.array([0, 100, 100]), np.array([180, 255, 255]))
@@ -347,11 +357,11 @@ class VisionAgent:
     def _pure_cv_classify(cv_features: dict) -> dict:
         """Classify anomalies using OpenCV feature thresholds.
 
-        Tuned against real warehouse video data:
-          - Clean warehouse: blobs=0, brown=0, blue=0, skin=0
-          - Pest video:      blobs=30+, brown>0.05
-          - Leak video:      blue>0.10 (high-saturation blue pooling)
-          - Spoilage video:  green>0.05
+        Tuned against actual user video data:
+          - Clean warehouse (848x480): blobs=0, brown=0, rust=0, gray_water=0.33, sat=9
+          - Pest video (848x480):      blobs=23-65, brown=0.09-0.13, skin=0.27-0.31
+          - Leak video (1280x720):     rust=0.21-0.25, gray_water=0.16-0.19, brown=0.26-0.32
+          - Pest+blue (1280x720):      blobs=11+, brown>0.05, skin>0.12
         """
         anomalies: list[str] = []
         details: list[str] = []
@@ -365,41 +375,44 @@ class VisionAgent:
         edge = cv_features["edge_density"]
         skin = cv_features.get("skin_ratio", 0)
         human_blobs = cv_features.get("human_skin_blobs", 0)
+        rust = cv_features.get("rust_ratio", 0)
+        gray_water = cv_features.get("gray_water_ratio", 0)
+        high_sat = cv_features.get("high_sat_ratio", 0)
 
-        # --- Pest: multiple small brown circular blobs with significant brown area ---
+        # --- Leak: rust + gray water, OR blue pooling ---
+        # Real leaks show rusty pipes (rust>0.10) with gray/white water splashing
+        # Clean warehouse has gray_water~0.33 but rust=0 and low saturation
+        if rust > 0.08 and gray_water > 0.10:
+            anomalies.append("leak")
+            severity = "critical"
+            details.append(f"Leak detected: {rust:.1%} rust, {gray_water:.1%} water/moisture")
+        elif rust > 0.05 and brown > 0.15:
+            anomalies.append("leak")
+            severity = "high"
+            details.append(f"Possible leak: {rust:.1%} corrosion, {brown:.1%} water damage")
+        elif blue > 0.15:
+            anomalies.append("leak")
+            severity = "critical"
+            details.append(f"Leak/spill detected: {blue:.1%} water pooling")
+
+        # --- Pest: small brown blobs (insects) ---
         if blobs >= 15 and brown > 0.05:
             anomalies.append("pest")
-            severity = "high"
+            if severity == "low":
+                severity = "high"
             details.append(f"Pest detected: {blobs} insect-like objects, {brown:.1%} brown coverage")
         elif blobs >= 8 and brown > 0.03:
             anomalies.append("pest")
-            severity = "medium"
+            if severity == "low":
+                severity = "medium"
             details.append(f"Possible pest: {blobs} suspicious objects, {brown:.1%} brown coverage")
-
-        # --- Leak/spill: concentrated blue pooling (not just blue-tinted lighting) ---
-        if blue > 0.15:
-            anomalies.append("leak")
-            severity = "critical"
-            details.append(f"Leak/spill detected: {blue:.1%} blue/water coverage")
-        elif blue > 0.08 and cv_features["bright_spots_ratio"] > 0.05:
-            anomalies.append("leak")
-            if severity not in ("critical",):
-                severity = "high"
-            details.append(f"Possible leak: {blue:.1%} blue with specular reflection")
 
         # --- Spoilage: green/mold ---
         if green > 0.08:
             anomalies.append("spoilage")
-            if severity not in ("critical",):
+            if severity == "low":
                 severity = "high"
             details.append(f"Spoilage/mold: {green:.1%} green coverage")
-
-        # --- Damage: very high edge density + significant dark areas ---
-        if edge > 0.18 and dark > 0.15:
-            anomalies.append("damage")
-            if severity == "low":
-                severity = "medium"
-            details.append(f"Structural damage: {edge:.1%} edge density, {dark:.1%} dark regions")
 
         # --- Human presence from skin-tone analysis ---
         human_detected = False
