@@ -14,6 +14,8 @@ import time
 import uuid
 from pathlib import Path
 
+import cv2
+
 from config import AppConfig, MATFORMER_PROFILES
 from llm.gemma_runtime import GemmaRuntime
 from llm.gemini_runtime import GeminiRuntime
@@ -112,28 +114,59 @@ class RootOrchestrator:
         if reconcile["processed"] > 0:
             result["pending_reconcile"] = reconcile
 
-        # ── VIDEO PROCESSING ─────────────────────────────────────────
+        # ── VIDEO PROCESSING (with motion detection) ──────────────────
         all_frame_observations: list[dict] = []
         if video_path and VideoProcessor.is_video(video_path):
             result["video_info"] = self.video_processor.get_video_info(video_path)
 
-            frames_dir = str(Path(video_path).parent / "frames")
-            saved_frames = self.video_processor.extract_and_save(video_path, frames_dir)
-            result["frames_extracted"] = len(saved_frames)
+            frames_dir = Path(video_path).parent / "frames"
+            frames_dir.mkdir(parents=True, exist_ok=True)
 
-            for sf in saved_frames:
-                obs = self.vision.observe(
-                    image_path=sf["path"],
-                    text_input=text_input,
-                    session_id=self._session_id,
-                    correlation_id=correlation_id,
-                )
-                obs["timestamp"] = sf["timestamp_s"]
-                obs["frame_path"] = sf["path"]
-                all_frame_observations.append(obs)
+            self.vision.reset_motion_detector()
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                raise IOError(f"Cannot open video: {video_path}")
 
-            if saved_frames:
-                image_path = saved_frames[0]["path"]
+            video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            target_fps = self.config.video.fps_target
+            frame_interval = max(1, int(video_fps / target_fps))
+            max_frames = self.config.video.max_frames
+            frame_idx = 0
+            yielded = 0
+
+            while cap.isOpened() and yielded < max_frames:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                motion_data = self.vision._detect_motion_objects(frame)
+
+                if frame_idx % frame_interval == 0:
+                    frame_path = str(frames_dir / f"frame_{yielded:04d}.jpg")
+                    cv2.imwrite(frame_path, frame)
+
+                    obs = self.vision.observe(
+                        image_path=frame_path,
+                        text_input=text_input,
+                        session_id=self._session_id,
+                        correlation_id=correlation_id,
+                        motion_data=motion_data,
+                    )
+                    obs["timestamp"] = round(frame_idx / video_fps, 2)
+                    obs["frame_index"] = frame_idx
+                    obs["frame_path"] = frame_path
+                    all_frame_observations.append(obs)
+                    yielded += 1
+
+                frame_idx += 1
+
+            cap.release()
+            result["frames_extracted"] = len(all_frame_observations)
+
+            if all_frame_observations:
+                best = self._find_anomaly_frame(all_frame_observations)
+                if best and best.get("frame_path"):
+                    image_path = best["frame_path"]
 
         # ── SEE ──────────────────────────────────────────────────────
         if all_frame_observations:

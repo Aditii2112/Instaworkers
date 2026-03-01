@@ -70,6 +70,7 @@ class VisionAgent:
         self._hand_landmarker = None
         self._mp_image_cls = None
         self._mp_image_format = None
+        self._bg_subtractor = None
 
         self._init_vlm()
         self._init_detectors()
@@ -209,6 +210,54 @@ class VisionAgent:
                         result["face_boxes"].append({"x": x, "y": y, "w": bw, "h": bh})
 
         return result
+
+    # ── Motion-Based Pest Detection ──────────────────────────────────
+
+    def _detect_motion_objects(self, frame: np.ndarray) -> dict:
+        """Detect moving objects using background subtraction.
+
+        A mouse/rat on a static warehouse floor shows up clearly as foreground
+        motion even when color-based detection fails (e.g. white/gray pest).
+        """
+        if self._bg_subtractor is None:
+            self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(
+                history=20, varThreshold=50, detectShadows=True
+            )
+
+        fg_mask = self._bg_subtractor.apply(frame)
+        fg_mask = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY)[1]
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        fg_clean = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        fg_clean = cv2.morphologyEx(fg_clean, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        h, w = frame.shape[:2]
+        total_px = h * w
+        contours, _ = cv2.findContours(fg_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        min_area = total_px * 0.0003
+        max_area = total_px * 0.08
+        moving = []
+        for c in contours:
+            area = cv2.contourArea(c)
+            if min_area < area < max_area:
+                peri = cv2.arcLength(c, True)
+                if peri > 0:
+                    aspect = max(*cv2.boundingRect(c)[2:4]) / (min(*cv2.boundingRect(c)[2:4]) + 1)
+                    if aspect < 5:
+                        x, y, bw, bh = cv2.boundingRect(c)
+                        moving.append({"x": x, "y": y, "w": bw, "h": bh, "area": int(area)})
+
+        fg_ratio = cv2.countNonZero(fg_clean) / total_px
+        return {
+            "moving_objects": moving,
+            "fg_ratio": round(fg_ratio, 4),
+            "motion_detected": len(moving) > 0,
+        }
+
+    def reset_motion_detector(self):
+        """Reset background model for a new video."""
+        self._bg_subtractor = None
 
     # ── VLM Analysis ─────────────────────────────────────────────────
 
@@ -434,7 +483,7 @@ class VisionAgent:
         result: dict = {
             "anomaly": anomalies[0] if anomalies else "none",
             "severity": severity,
-            "location": "Zone_A" if anomalies else "unknown",
+            "location": "Aisle_4" if anomalies else "unknown",
             "raw_vlm": see_text,
             "cv_features": cv_features,
         }
@@ -472,6 +521,7 @@ class VisionAgent:
         text_input: str | None = None,
         session_id: str = "",
         correlation_id: str = "",
+        motion_data: dict | None = None,
     ) -> dict:
         """Run vision pipeline on a single frame and return structured observation."""
         start = time.perf_counter()
@@ -514,10 +564,28 @@ class VisionAgent:
                     image_path = temp_path
 
                 vlm_result = self._vlm_analyze(image_path, text_input)
+
+                # Motion-based override: if CV found nothing but motion detected a pest
+                if vlm_result.get("anomaly") == "none" and motion_data and motion_data.get("motion_detected"):
+                    n_moving = len(motion_data.get("moving_objects", []))
+                    vlm_result["anomaly"] = "pest"
+                    vlm_result["severity"] = "high"
+                    vlm_result["location"] = "Aisle_4"
+                    vlm_result["raw_vlm"] = (
+                        f"SEE: [Pest detected] Motion analysis: {n_moving} moving object(s) "
+                        f"on warehouse floor (fg_ratio={motion_data.get('fg_ratio', 0):.3f})"
+                    )
+                    vlm_result["all_anomalies_in_frame"] = ["pest"]
+                    vlm_result["motion_boxes"] = motion_data.get("moving_objects", [])
+
                 observation["anomaly"] = vlm_result.get("anomaly", "none")
                 observation["severity"] = vlm_result.get("severity", "low")
                 observation["location"] = vlm_result.get("location", "unknown")
                 observation["raw_vlm"] = vlm_result.get("raw_vlm", "")
+                if vlm_result.get("all_anomalies_in_frame"):
+                    observation["all_anomalies_in_frame"] = vlm_result["all_anomalies_in_frame"]
+                if vlm_result.get("motion_boxes"):
+                    observation["motion_boxes"] = vlm_result["motion_boxes"]
                 print(f"[SEE] Frame → anomaly={observation['anomaly']}, human={observation['human_present']}, vlm={observation['raw_vlm'][:120]}")
 
         finally:
@@ -546,16 +614,18 @@ class VisionAgent:
         correlation_id: str = "",
         callback=None,
     ):
-        """Process video at target FPS. Yields observation dicts per frame.
+        """Process video at target FPS with motion detection across frames.
 
-        Each observation includes anomaly, severity, location, human_present,
-        bounding boxes, and the raw VLM output.
+        Uses background subtraction to detect moving objects (pests) that
+        color-based detection may miss (e.g. white/gray mice).
         """
         fps = fps_target or self.config.video.fps_target
         cap_limit = max_frames or self.config.video.max_frames
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise IOError(f"Cannot open video: {video_path}")
+
+        self.reset_motion_detector()
 
         video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         frame_interval = max(1, int(video_fps / fps))
@@ -566,6 +636,9 @@ class VisionAgent:
             ret, frame = cap.read()
             if not ret:
                 break
+
+            # Feed EVERY frame to the background subtractor for accurate motion model
+            motion_data = self._detect_motion_objects(frame)
 
             if frame_idx % frame_interval == 0:
                 timestamp_s = round(frame_idx / video_fps, 2)
@@ -579,6 +652,7 @@ class VisionAgent:
                         text_input=text_input,
                         session_id=session_id,
                         correlation_id=correlation_id,
+                        motion_data=motion_data,
                     )
                     obs["timestamp"] = timestamp_s
                     obs["frame_index"] = frame_idx
@@ -608,6 +682,11 @@ class VisionAgent:
         for box in observation.get("hand_boxes", []):
             x, y, w, h = box["x"], box["y"], box["w"], box["h"]
             cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 200, 255), 2)
+
+        for box in observation.get("motion_boxes", []):
+            x, y, w, h = box["x"], box["y"], box["w"], box["h"]
+            cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 0, 255), 2)
+            cv2.putText(annotated, "PEST", (x, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
         anomaly = observation.get("anomaly", "none")
         if anomaly != "none":

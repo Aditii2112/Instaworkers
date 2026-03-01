@@ -92,7 +92,8 @@ export default function WarehouseDashboard({ result, activeStage, loading }) {
           </div>
           <div className="aspect-video bg-black flex items-center justify-center relative overflow-hidden">
             <video
-              src="/api/video/demo"
+              key={result?.correlation_id || "idle"}
+              src={`/api/video/demo?t=${result?.correlation_id || "0"}`}
               className="w-full h-full object-contain"
               controls
               muted

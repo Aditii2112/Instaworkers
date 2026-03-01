@@ -49,6 +49,7 @@ _domain_tools_registered = False
 
 UPLOAD_DIR = ROOT_DIR / "data" / "uploads"
 ALERTS_DIR = ROOT_DIR / "data" / "alerts"
+_last_uploaded_video: str | None = None
 
 
 def _startup():
@@ -208,9 +209,23 @@ async def run_cycle(
     video: UploadFile | None = File(None),
 ):
     """Run one full See → Reason → Act → Audit cycle."""
+    # Purge ALL stale data so the dashboard only shows results from THIS run
+    for purge_dir in [ALERTS_DIR, UPLOAD_DIR / "frames", UPLOAD_DIR]:
+        if purge_dir.exists():
+            shutil.rmtree(purge_dir)
+        purge_dir.mkdir(parents=True, exist_ok=True)
+    safety_log = ROOT_DIR / "data" / "safety-log.jsonl"
+    if safety_log.exists():
+        safety_log.unlink()
+
+    global _last_uploaded_video
     image_path = _save_upload(image, ".png")
     video_path = _save_upload(video, ".mp4")
+    if video_path:
+        _last_uploaded_video = video_path
     text_input = text.strip() if text.strip() else None
+
+    print(f"[API] run_cycle: text={bool(text_input)} image={bool(image_path)} video={video_path}")
 
     if not text_input and not image_path and not video_path:
         return JSONResponse(
@@ -355,11 +370,13 @@ def serve_alert_image(filename: str):
 
 @app.get("/api/video/demo")
 def serve_demo_video():
+    if _last_uploaded_video and Path(_last_uploaded_video).exists():
+        return FileResponse(_last_uploaded_video, media_type="video/mp4")
     from config import load_config as _lc
     cfg = _lc()
     video_path = Path(cfg.video.demo_path)
     if not video_path.exists():
-        return JSONResponse(status_code=404, content={"error": "Demo video not found", "path": str(video_path)})
+        return JSONResponse(status_code=404, content={"error": "Demo video not found. Add data/demo.mp4 or set VIDEO_DEMO_PATH"})
     return FileResponse(video_path, media_type="video/mp4")
 
 

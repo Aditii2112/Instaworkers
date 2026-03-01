@@ -10,7 +10,7 @@ const STAGE_TIMINGS = [800, 2500, 1500, 600];
 
 export default function App() {
   const [view, setView] = useState("pipeline");
-  const [showWarehouse, setShowWarehouse] = useState(false);
+  const [showWarehouse, setShowWarehouse] = useState(true);
   const [loading, setLoading] = useState(false);
   const [resettingSession, setResettingSession] = useState(false);
   const [activeStage, setActiveStage] = useState(null);
@@ -176,7 +176,18 @@ export default function App() {
 
           <main className="max-w-[1600px] mx-auto px-6 py-6">
             {showWarehouse ? (
-              <WarehouseDashboard result={result} activeStage={activeStage} loading={loading} />
+              <div className="space-y-6">
+                <div className="bg-dark-800 border border-dark-600 rounded-2xl p-5">
+                  <InputPanel onSubmit={handleSubmit} loading={loading} />
+                </div>
+                {error && (
+                  <div className="bg-danger/10 border border-danger/20 rounded-xl p-4 animate-slide-up">
+                    <p className="text-sm text-danger font-medium">Error</p>
+                    <p className="text-xs text-danger/80 mt-1">{error}</p>
+                  </div>
+                )}
+                <WarehouseDashboard result={result} activeStage={activeStage} loading={loading} />
+              </div>
             ) : (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 <div className="lg:col-span-4">
