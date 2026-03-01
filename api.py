@@ -169,6 +169,17 @@ def new_session():
         return JSONResponse(status_code=503, content={"error": "Orchestrator not initialized"})
     previous_session_id = orchestrator.session_id
     orchestrator.new_session()
+
+    # Clear stale data from previous session
+    import shutil
+    alerts_dir = ROOT_DIR / "data" / "alerts"
+    if alerts_dir.exists():
+        shutil.rmtree(alerts_dir)
+    alerts_dir.mkdir(parents=True, exist_ok=True)
+    safety_log = ROOT_DIR / "data" / "safety-log.jsonl"
+    if safety_log.exists():
+        safety_log.unlink()
+
     return {
         "status": "ok",
         "previous_session_id": previous_session_id,

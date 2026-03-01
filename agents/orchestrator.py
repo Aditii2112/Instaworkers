@@ -193,9 +193,11 @@ class RootOrchestrator:
         }
 
         # ── RETRIEVE (part of REASON) ────────────────────────────────
-        # Skip stale InstaBrain retrieval when VLM already identified a clear anomaly.
-        # Only use inventory context — the deterministic planner doesn't need old memories.
-        if anomaly != "none":
+        # For video-based analysis, skip InstaBrain retrieval entirely.
+        # Old memories from previous sessions are irrelevant to fresh video frames.
+        # Only retrieve context for text-only queries (no video uploaded).
+        has_video = bool(video_path) or bool(all_frame_observations)
+        if has_video:
             context = {"memories": [], "checkpoints": []}
             if inventory_context:
                 context["memories"].append(
