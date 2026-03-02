@@ -5,6 +5,8 @@
 The system processes 4K video feeds entirely at the edge, identifies anomalies, coordinates with local inventory databases, and audits every action against a safety constitution—**100% offline.**
 
 Demo: https://drive.google.com/file/d/1iWbdTB_gN6dmG4eRcic3kqNkFH-fCl2d/view?usp=sharing
+
+<img width="1407" height="821" alt="dashboard" src="https://github.com/user-attachments/assets/011121bf-be8b-472f-bb0f-261f3feab162" />
 ---
 
 ##  The $160B Problem Statement
@@ -101,5 +103,5 @@ chmod +x start_sentinel.sh
 
 **Technologies:** PaliGemma 2, Gemma, FunctionGemma, mlx-vlm, Ollama, React, OpenCV.
 
-<img width="1407" height="821" alt="dashboard" src="https://github.com/user-attachments/assets/011121bf-be8b-472f-bb0f-261f3feab162" />
+
 
