@@ -4,6 +4,7 @@
 
 The system processes 4K video feeds entirely at the edge, identifies anomalies, coordinates with local inventory databases, and audits every action against a safety constitution—**100% offline.**
 
+Demo: https://drive.google.com/file/d/1iWbdTB_gN6dmG4eRcic3kqNkFH-fCl2d/view?usp=sharing
 ---
 
 ##  The $160B Problem Statement
