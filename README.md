@@ -24,10 +24,10 @@ Our system uses a **Synchronous Handshake** between specialized agents to ensure
 
 | Agent | Model | Responsibility |
 | --- | --- | --- |
-| ** Vision (The Eyes)** | **PaliGemma 2 (3B)** | **Fine-Tuned.** Performs multi-class detection (Humans, Pests, Leaks) and spatial reasoning via `mlx-vlm`. |
-| ** Inventory (Context)** | **Logic-Based (SQL)** | Reconciles visual coordinates with `inventory.db` to identify at-risk SKUs. |
-| ** Action (The Worker)** | **FunctionGemma (270M)** | Generates Python tool calls for visual dispatch, ticketing, and database updates. |
-| ** Auditor (Watchdog)** | **Gemma (1B)** | **Policy Enforcement.** Intercepts tool calls to validate against Safety Policies (SENT-001/002/003). |
+| **Vision (The Eyes)** | **PaliGemma 2 (3B)** | **Fine-Tuned.** Performs multi-class detection (Humans, Pests, Leaks) and spatial reasoning via `mlx-vlm`. |
+| **Inventory (Context)** | **Logic-Based (SQL)** | Reconciles visual coordinates with `inventory.db` to identify at-risk SKUs. |
+| **Action (The Worker)** | **FunctionGemma (270M)** | Generates Python tool calls for visual dispatch, ticketing, and database updates. |
+| **Auditor (Watchdog)** | **Gemma (1B)** | **Policy Enforcement.** Intercepts tool calls to validate against Safety Policies (SENT-001/002/003). |
 
 ---
 
