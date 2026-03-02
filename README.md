@@ -100,3 +100,6 @@ chmod +x start_sentinel.sh
 **Team:** Instaworkers
 
 **Technologies:** PaliGemma 2, Gemma, FunctionGemma, mlx-vlm, Ollama, React, OpenCV.
+
+<img width="1407" height="821" alt="dashboard" src="https://github.com/user-attachments/assets/011121bf-be8b-472f-bb0f-261f3feab162" />
+
