@@ -1,4 +1,4 @@
-# 🛡️ Sovereign Sentinel: The On-Device Industrial Nervous System
+# Sovereign Sentinel: The On-Device Industrial Nervous System
 
 **Sovereign Sentinel** is a privacy-first, autonomous multi-agent orchestration platform designed by Team **Instaworkers**. Built for "Connectivity Deserts," the system utilizes a three-model ensemble—anchored by a **surgically fine-tuned PaliGemma 2 (3B)**—to move beyond simple object detection into **Autonomous Facility Governance**.
 
@@ -6,7 +6,7 @@ The system processes 4K video feeds entirely at the edge, identifies anomalies, 
 
 ---
 
-## 🚩 The $160B Problem Statement
+##  The $160B Problem Statement
 
 Global supply chains lose approximately **$160 Billion annually** to undetected "Micro-Escalations"—small leaks, pest intrusions, or structural faults that snowball into total batch loss.
 
@@ -16,7 +16,7 @@ Global supply chains lose approximately **$160 Billion annually** to undetected 
 
 ---
 
-## 🏗️ The Multi-Agent Architecture (SEE → REASON → ACT → AUDIT)
+##  The Multi-Agent Architecture (SEE → REASON → ACT → AUDIT)
 
 Our system uses a **Synchronous Handshake** between specialized agents to ensure data integrity and safety.
 
@@ -24,14 +24,14 @@ Our system uses a **Synchronous Handshake** between specialized agents to ensure
 
 | Agent | Model | Responsibility |
 | --- | --- | --- |
-| **👁️ Vision (The Eyes)** | **PaliGemma 2 (3B)** | **Fine-Tuned.** Performs multi-class detection (Humans, Pests, Leaks) and spatial reasoning via `mlx-vlm`. |
-| **📦 Inventory (Context)** | **Logic-Based (SQL)** | Reconciles visual coordinates with `inventory.db` to identify at-risk SKUs. |
-| **🛠️ Action (The Worker)** | **FunctionGemma (270M)** | Generates Python tool calls for visual dispatch, ticketing, and database updates. |
-| **🛡️ Auditor (Watchdog)** | **Gemma (1B)** | **Policy Enforcement.** Intercepts tool calls to validate against Safety Policies (SENT-001/002/003). |
+| ** Vision (The Eyes)** | **PaliGemma 2 (3B)** | **Fine-Tuned.** Performs multi-class detection (Humans, Pests, Leaks) and spatial reasoning via `mlx-vlm`. |
+| ** Inventory (Context)** | **Logic-Based (SQL)** | Reconciles visual coordinates with `inventory.db` to identify at-risk SKUs. |
+| ** Action (The Worker)** | **FunctionGemma (270M)** | Generates Python tool calls for visual dispatch, ticketing, and database updates. |
+| ** Auditor (Watchdog)** | **Gemma (1B)** | **Policy Enforcement.** Intercepts tool calls to validate against Safety Policies (SENT-001/002/003). |
 
 ---
 
-## 🧠 Technical Deep Dive: The Fine-Tuned Brain
+##  Technical Deep Dive: The Fine-Tuned Brain
 
 The core of our "SEE" layer is a **surgically fine-tuned PaliGemma 2 (3B)** developed by **Instaworkers**.
 
@@ -41,7 +41,7 @@ The core of our "SEE" layer is a **surgically fine-tuned PaliGemma 2 (3B)** deve
 
 ---
 
-## 🔄 The Sentinel Workflow
+## The Sentinel Workflow
 
 1. **Ingestion:** Processes a video stream at 2–5 FPS via OpenCV.
 2. **Detection:** Vision Agent identifies an anomaly (e.g., a "pest" near "Aisle 4").
@@ -51,7 +51,7 @@ The core of our "SEE" layer is a **surgically fine-tuned PaliGemma 2 (3B)** deve
 
 ---
 
-## 📊 Dashboard: The 'Nervous System' UI
+##  Dashboard: The 'Nervous System' UI
 
 The **Sovereign Sentinel Dashboard** (React/Tailwind) provides a high-stakes command center for warehouse operators:
 
@@ -62,7 +62,7 @@ The **Sovereign Sentinel Dashboard** (React/Tailwind) provides a high-stakes com
 
 ---
 
-## 🛠️ Industrial Tooling Suite
+##  Industrial Tooling Suite
 
 The agents have access to a specialized registry of tools:
 
@@ -72,7 +72,7 @@ The agents have access to a specialized registry of tools:
 
 ---
 
-## 🚀 Impact & Business Value
+##  Impact & Business Value
 
 * **Efficiency:** Reduces response latency from **minutes to milliseconds**.
 * **Edge Native:** Functions in environments with **zero connectivity**.
